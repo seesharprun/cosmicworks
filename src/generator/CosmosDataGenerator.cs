@@ -9,6 +9,14 @@ public class CosmosDataGenerator<T>(
     ICosmosDataService<T> cosmosDataService
 ) : ICosmosDataGenerator<T> where T : IItem
 {
+    private readonly int standardDatabaseThroughput = 400;
+
+    private readonly int[] scaledDatabaseThroughputs = [
+        10000, // Maximum amount of throughput the tool will attempt to set.
+        4000, // Ceiling for standard accounts with throughput limit set.
+        1000 // Ceiling for free-tier accounts with throughput limit set.
+    ];
+
     /// <inheritdoc />
     public async Task GenerateAsync(ConnectionOptions options, string databaseName, string containerName, int? count = null, bool disableHierarchicalPartitionKeys = false, Action<T>? onItemCreate = null)
     {
@@ -22,21 +30,53 @@ public class CosmosDataGenerator<T>(
         {
             string[] partitionKeys = [.. seedItems[0].PartitionKeys];
 
-            await cosmosDataService.ProvisionResourcesAsync(
+            bool serverless = await cosmosDataService.ProvisionResourcesAsync(
                 options,
                 databaseName,
                 containerName,
                 partitionKeys,
                 disableHierarchicalPartitionKeys
             );
-        }
 
-        await cosmosDataService.SeedDataAsync(
-            options,
-            databaseName,
-            containerName,
-            seedItems,
-            onItemCreate
-        );
+            if (!serverless)
+            {
+                // Scale up to start operations at a higher throughput.
+                await cosmosDataService.UpdateThroughputAsync(
+                    options,
+                    databaseName,
+                    containerName,
+                    scaledDatabaseThroughputs
+                );
+            }
+
+            await cosmosDataService.SeedDataAsync(
+                    options,
+                    databaseName,
+                    containerName,
+                    seedItems,
+                    onItemCreate
+                );
+
+            if (!serverless)
+            {
+                // Scale down to the standard throughput.
+                await cosmosDataService.UpdateThroughputAsync(
+                    options,
+                    databaseName,
+                    containerName,
+                    [standardDatabaseThroughput]
+                );
+            }
+        }
+        else
+        {
+            await cosmosDataService.SeedDataAsync(
+                options,
+                databaseName,
+                containerName,
+                seedItems,
+                onItemCreate
+            );
+        }
     }
 }
